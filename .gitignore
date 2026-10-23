@@ -4,6 +4,7 @@ wandb
 .data
 dev.ipynb
 job_spec.yaml
+.secrets
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -153,6 +154,10 @@ activemq-data/
 
 # SageMath parsed files
 *.sage.py
+
+# Google OAuth credentials
+token.json
+credentials.json
 
 # Environments
 .env

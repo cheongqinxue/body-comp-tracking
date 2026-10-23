@@ -1,0 +1,35 @@
+[project]
+name = "body-comp-tracking"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "dotenv>=0.9.9",
+    "google-auth-httplib2>=0.4.0",
+    "google-auth-oauthlib>=1.4.0",
+    "gspread>=6.2.1",
+    "gspread-dataframe==4.0.0",
+    "matplotlib>=3.8",
+    "numind==0.3.0",
+    "openai==2.45.0",
+    "pandas>=2.0",
+    "pydantic==2.13.4",
+    "streamlit>=1.59.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+pythonpath = ["src"]
+markers = [
+    "integration: tests that call external services or require real credentials",
+]
+
+[tool.ruff]
+line-length = 100

@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONDA_ENV="${CONDA_ENV:-llm}"
+CONDA_BIN="${CONDA_BIN:-${HOME}/anaconda3/bin/conda}"
+
+# NTFS/exFAT Hugging Face caches often store Windows symlinks Linux cannot read.
+export HF_HUB_DISABLE_SYMLINKS="${HF_HUB_DISABLE_SYMLINKS:-1}"
+export HF_HUB_DISABLE_SYMLINKS_WARNING="${HF_HUB_DISABLE_SYMLINKS_WARNING:-1}"
+
+# Pin nvcc to CUDA 13.0 in the llm env with:
+#   bash scripts/align_cuda_toolchain.sh
+#
+# FlashInfer's JIT sampling kernels still fail with the mixed pip CUDA stack
+# (crt/runtime packages can differ). Disable them; vLLM falls back to native
+# sampling, which is fine for NuExtract extraction workloads.
+# export VLLM_USE_FLASHINFER_SAMPLER="${VLLM_USE_FLASHINFER_SAMPLER:-0}"
+
+VLLM_ARGS=(
+  serve "numind/NuExtract3-W8A8"
+  --trust-remote-code
+  --limit-mm-per-prompt '{"image": 99, "video": 0}'
+  --chat-template-content-format openai
+  --generation-config vllm
+  --max-model-len 131072
+)
+
+repair_cache() {
+  echo "Checking Hugging Face cache symlinks..." >&2
+  local conda_python="${HOME}/anaconda3/envs/${CONDA_ENV}/bin/python"
+  if [[ -x "${conda_python}" ]]; then
+    "${conda_python}" "${SCRIPT_DIR}/repair_hf_cache.py"
+    return
+  fi
+
+  python3 "${SCRIPT_DIR}/repair_hf_cache.py"
+}
+
+setup_cuda_home() {
+  if [[ -n "${CUDA_HOME:-}" && -x "${CUDA_HOME}/bin/nvcc" ]]; then
+    export PATH="${CUDA_HOME}/bin:${PATH}"
+    fix_cuda_link_layout "${CUDA_HOME}"
+    return
+  fi
+
+  local detected_nvcc
+  detected_nvcc="$(
+    find "${HOME}/anaconda3/envs/${CONDA_ENV}/lib" -path '*/nvidia/cu13/bin/nvcc' 2>/dev/null | head -1
+  )"
+  if [[ -n "${detected_nvcc}" ]]; then
+    export CUDA_HOME="$(dirname "$(dirname "${detected_nvcc}")")"
+    export PATH="${CUDA_HOME}/bin:${PATH}"
+    echo "Using CUDA_HOME=${CUDA_HOME}" >&2
+    fix_cuda_link_layout "${CUDA_HOME}"
+    return
+  fi
+
+  echo "Warning: nvcc not found. Set CUDA_HOME if vLLM fails to compile CUDA code." >&2
+  echo "Run: bash scripts/align_cuda_toolchain.sh" >&2
+}
+
+fix_cuda_link_layout() {
+  local cuda_home="$1"
+  # FlashInfer links against lib64/libcudart.so; pip cu13 uses lib/libcudart.so.13.
+  if [[ -d "${cuda_home}/lib" && ! -e "${cuda_home}/lib64" ]]; then
+    ln -sf lib "${cuda_home}/lib64"
+  fi
+  if [[ -f "${cuda_home}/lib/libcudart.so.13" && ! -e "${cuda_home}/lib/libcudart.so" ]]; then
+    ln -sf libcudart.so.13 "${cuda_home}/lib/libcudart.so"
+  fi
+}
+
+run_vllm() {
+  if [[ -n "${VLLM_BIN:-}" ]]; then
+    exec "${VLLM_BIN}" "${VLLM_ARGS[@]}"
+  fi
+
+  if [[ -x "${CONDA_BIN}" ]]; then
+    echo "Starting vLLM in conda env '${CONDA_ENV}'..." >&2
+    exec "${CONDA_BIN}" run --no-capture-output -n "${CONDA_ENV}" vllm "${VLLM_ARGS[@]}"
+  fi
+
+  if command -v vllm >/dev/null 2>&1; then
+    exec vllm "${VLLM_ARGS[@]}"
+  fi
+
+  echo "vllm not found." >&2
+  echo "Expected conda at: ${CONDA_BIN}" >&2
+  echo "Expected env name: ${CONDA_ENV}" >&2
+  echo "Override with CONDA_BIN, CONDA_ENV, or VLLM_BIN if needed." >&2
+  exit 127
+}
+
+repair_cache
+setup_cuda_home
+run_vllm
